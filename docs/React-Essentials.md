@@ -648,5 +648,110 @@ export default function RootLayout({ children }) {
 ```
 Good to know: 
 
-가능한 깊이까지 프로바이더를 렌더링해야 합니다. ThemeProvider가 전체 <html> 문서를 감싸는 대신 {children}만 감싸는 것에 유의하세요. 이렇게 하면 Next.js가 Server Component의 정적 부분을 최적화하기가 더 쉬워집니다.
+가능한 깊이까지 프로바이더를 렌더링해야 합니다. 
+ThemeProvider가 전체 <html> 문서를 감싸는 대신 {children}만 감싸는 것에 유의하세요. 
+이렇게 하면 Next.js가 Server Component의 정적 부분을 최적화하기가 더 쉬워집니다.
+
 ```
+
+#### Rendering third-party context providers in Server Components
+
+서드파티 npm 패키지는 종종 애플리케이션의 루트 근처에 렌더링되어야 하는 프로바이더를 포함하고 있습니다. 이러한 프로바이더가 `use client` 지시문을 포함하고 있다면, 서버 컴포넌트 내부에서 직접 렌더링할 수 있습니다. 하지만, 서버 컴포넌트가 매우 새로운 개념이기 때문에, 많은 서드파티 프로바이더는 아직 해당 지시문을 추가하지 않았을 것입니다.
+
+만약 `use client` 지시문이 없는 서드파티 프로바이더를 렌더링하려고 한다면, 에러가 발생합니다.
+
+```
+app/provider.js
+
+import { ThemeProvider } from 'acme-theme'
+ 
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        {/*  Error: `createContext` can't be used in Server Components */}
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+수정하려면 서드파티 프로바이더를 클라이언트 컴포넌트로 감싸야합니다.
+
+```
+app/provider.js
+
+'use client'
+ 
+import { ThemeProvider } from 'acme-theme'
+import { AuthProvider } from 'acme-auth'
+ 
+export function Providers({ children }) {
+  return (
+    <ThemeProvider>
+      <AuthProvider>{children}</AuthProvider>
+    </ThemeProvider>
+  )
+}
+```
+이제 `<Providers />`를 가져와서 루트 레이아웃 안에서 직접 렌더링할 수 있습니다.
+
+```
+app/layout.js
+
+import { Providers } from './providers'
+ 
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  )
+}
+```
+루트에 렌더링된 프로바이더들로 인해, 이러한 라이브러리의 모든 컴포넌트와 훅들은 사용자의 클라이언트 컴포넌트 내에서 예상대로 작동할 것입니다.
+
+서드파티 라이브러리가 자신의 클라이언트 코드에 `use client`를 추가한 경우, 래퍼 클라이언트 컴포넌트를 제거할 수 있게 될 것입니다.
+
+##### Sharing data between Server Components
+
+서버 컴포넌트는 인터랙티브하지 않으며 따라서 React 상태를 읽지 않기 때문에 데이터를 공유하기 위해 React 컨텍스트를 사용할 필요가 없습니다. 대신, 여러 서버 컴포넌트가 접근해야 하는 공통 데이터에 대해 네이티브 JavaScript 패턴을 사용할 수 있습니다. 예를 들어, 모듈을 사용하여 여러 컴포넌트 간에 데이터베이스 연결을 공유할 수 있습니다.
+
+```
+utils/database.js
+
+export const db = new DatabaseConnection()
+```
+
+```
+app/users/layout.js
+
+import { db } from '@utils/database'
+ 
+export async function UsersLayout() {
+  let users = await db.query()
+  // ...
+}
+```
+
+```
+app/users/[id]/page.js
+
+import { db } from '@utils/database'
+ 
+export async function DashboardPage() {
+  let user = await db.query()
+  // ...
+}
+```
+위의 예제에서 레이아웃과 페이지는 모두 데이터베이스 쿼리를 수행해야 합니다. 이러한 컴포넌트들은 `@utils/database` 모듈을 import하여 데이터베이스에 접근을 공유합니다. 이 JavaScript 패턴은 global singletons이라고 불립니다.
+
+##### Sharing fetch requests between Server Components
+
+데이터를 가져올 때 페이지나 레이아웃과 그 하위 컴포넌트 간에 가져온 데이터를 공유하고 싶을 수 있습니다. 이는 컴포넌트들 간의 불필요한 결합을 일으킬 수 있으며, 컴포넌트 간에 props 주고받는 것으로 이어질 수 있습니다.
+
+대신, 데이터를 소비하는 컴포넌트와 데이터 가져오기를 함께 위치시키는 것을 권장합니다. `Server Components에서 fetch 요청`(https://nextjs.org/docs/app/building-your-application/data-fetching#automatic-fetch-request-deduping)은 자동으로 중복 제거되므로 각 route segment는 중복 요청에 대해 걱정할 필요 없이 정확히 필요한 데이터를 요청할 수 있습니다. Next.js는 fetch 캐시에서 동일한 값을 읽게 됩니다.
+
